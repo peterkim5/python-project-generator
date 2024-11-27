@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Configuration
+: "${PYTHON_CMD:=python3}"
+: "${MINIMUM_PYTHON_VERSION:=3.10}"
+
+# Logging functions
+log() { [[ "${VERBOSE:-0}" == "1" ]] && echo -e "\033[0;36m[DEBUG]\033[0m $1" >&2; }
+error() { echo -e "\033[0;31m[ERROR]\033[0m $1" >&2; exit "${2:-1}"; }
+info() { echo -e "\033[0;32m[INFO]\033[0m $1" >&2; }
+
+# Check if template exists
+if [[ -d "${0%/*}/template" ]]; then
+    : "${PROJECT_TEMPLATE:=$(realpath "${0%/*}/template")}"
+    USE_TEMPLATE_DIR=1
+else
+    USE_TEMPLATE_DIR=0
+    info "Template directory not found, using inline template"
+fi
+
+create_project() {
+    local name=$1
+    local dir="$PWD/$name"
+    local package_name=$(echo "$name" | tr '-' '_')  # Convert project name to Python package name
+    
+    info "Creating project directory: $dir"
+    mkdir -p "$dir/src/$package_name"
+    mkdir -p "$dir"/{tests,docs}
+    
+    # Create pyproject.toml with correct package configuration
+    cat > "$dir/pyproject.toml" << EOF
+[project]
+name = "$name"
+version = "0.1.0"
+description = "A new Python project"
+requires-python = ">=$MINIMUM_PYTHON_VERSION"
+readme = "README.md"
+authors = [{ name = "$(git config --get user.name 2>/dev/null || echo "Your Name")" }]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/$package_name"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+EOF
+    
+    # Create package __init__.py
+    cat > "$dir/src/$package_name/__init__.py" << EOF
+"""$name package."""
+
+__version__ = "0.1.0"
+EOF
+    
+    # Create example module
+    cat > "$dir/src/$package_name/example.py" << EOF
+"""Example module."""
+
+def hello():
+    """Return a greeting."""
+    return "Hello from $name!"
+EOF
+    
+    # Create test file
+    cat > "$dir/tests/test_example.py" << EOF
+"""Test example module."""
+
+from $package_name.example import hello
+
+def test_hello():
+    """Test hello function."""
+    assert hello() == "Hello from $name!"
+EOF
+    
+    # Create README.md
+    cat > "$dir/README.md" << EOF
+# ${name}
+
+A new Python project.
+
+## Installation
+
+\`\`\`bash
+pip install -e .
+\`\`\`
+
+## Development
+
+1. Create a virtual environment: \`python -m venv .venv\`
+2. Activate it: \`source .venv/bin/activate\`
+3. Install development dependencies: \`pip install pytest black ruff\`
+4. Run tests: \`pytest\`
+EOF
+    
+    # Create .gitignore
+    cat > "$dir/.gitignore" << EOF
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+EOF
+
+    # Create .gitattributes
+    cat > "$dir/.gitattributes" << EOF
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+EOF
+    
+    # Initialize git repository
+    if command -v git >/dev/null; then
+        (cd "$dir" && git init -q)
+    fi
+    
+    info "Project structure created successfully!"
+}
+
+create_venv() {
+    local project_dir=$1
+    local venv_dir="$project_dir/.venv"
+    
+    info "Creating virtual environment..."
+    if command -v uv >/dev/null; then
+        info "Using uv to create virtual environment..."
+        # Create venv with uv
+        uv venv "$venv_dir"
+        
+        info "Installing development dependencies..."
+        # Wait a moment for venv to be fully created
+        sleep 1
+        
+        # Activate the venv first
+        source "$venv_dir/bin/activate"
+        
+        # Use uv pip install directly
+        info "Installing dependencies with uv..."
+        uv pip install pytest black ruff
+        info "Installing project in editable mode..."
+        uv pip install -e "$project_dir"
+    else
+        info "Using standard venv module..."
+        $PYTHON_CMD -m venv "$venv_dir"
+        
+        local pip_cmd="$venv_dir/bin/pip"
+        [[ "$OSTYPE" =~ ^(msys|cygwin|win32)$ ]] && pip_cmd="$venv_dir/Scripts/pip"
+        
+        info "Installing development dependencies..."
+        "$pip_cmd" install pytest black ruff
+        "$pip_cmd" install -e "$project_dir"
+    fi
+    
+    info "Project installed in editable mode"
+}
+
+main() {
+        [[ $# -ne 1 ]] && { echo "Usage: $0 <project_name>"; exit 1; }
+        
+        local project_name=$1
+        create_project "$project_name"
+        create_venv "$project_name"
+        
+        info "Project '$project_name' setup complete!"
+        echo
+        echo "Next steps:"
+        echo "1. cd $project_name"
+        echo "2. source .venv/bin/activate"
+        echo "3. Start developing! Your project is already installed in editable mode"
+        echo
+        echo "Git setup:"
+        echo "1. git add ."
+        echo "2. git commit -m \"Initial project structure\""
+        echo "3. Create an empty repository on GitHub (no README, no license)"
+        echo "4. git remote add origin <your-repo-url>"
+        echo "5. git push -u origin main"
+}
+
+# Execute main function
+main "$@"
